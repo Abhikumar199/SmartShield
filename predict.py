@@ -12,20 +12,21 @@ class Net(nn.Module):
     def __init__(self):
         super().__init__()
 
-        self.fc1 = nn.Linear(800,128)
+        # match training architecture
+        self.fc1 = nn.Linear(1200, 256)
         self.lif1 = snn.Leaky(beta=0.9)
 
-        self.fc2 = nn.Linear(128,2)
+        self.fc2 = nn.Linear(256, 2)
         self.lif2 = snn.Leaky(beta=0.9)
 
-    def forward(self,x):
+    def forward(self, x):
 
         mem1 = self.lif1.init_leaky()
         mem2 = self.lif2.init_leaky()
 
         spk2_rec = []
 
-        num_steps = 25   # number of SNN time steps
+        num_steps = 25  # SNN simulation steps
 
         for step in range(num_steps):
 
@@ -37,7 +38,8 @@ class Net(nn.Module):
 
             spk2_rec.append(spk2)
 
-        return torch.stack(spk2_rec).sum(0)  # accumulate spikes
+        # accumulate spikes over time
+        return torch.stack(spk2_rec).sum(0)
 
 
 # Load model
@@ -48,7 +50,7 @@ model.eval()
 
 def predict_sms(text):
 
-    text = text.lower()  # important preprocessing
+    text = text.lower()
 
     X = vectorizer.transform([text])
     X = scaler.transform(X.toarray())
@@ -58,9 +60,14 @@ def predict_sms(text):
     with torch.no_grad():
         output = model(X_tensor)
 
-    prediction = torch.argmax(output, dim=1)
+    # Convert logits/spikes to probabilities
+    import torch.nn.functional as F
+    probs = F.softmax(output, dim=1)
 
-    return prediction.item()
+    prediction = torch.argmax(probs, dim=1)
+    confidence = probs.max().item()
+
+    return prediction.item(), confidence
 
 
 # Interactive testing
@@ -70,9 +77,9 @@ while True:
     if msg.lower() == "quit":
         break
 
-    result = predict_sms(msg)
+    result, confidence = predict_sms(msg)
 
     if result == 1:
-        print("🚨 Prediction: SPAM")
+        print(f"🚨 Prediction: SPAM (confidence {confidence:.2f})")
     else:
-        print("✅ Prediction: NOT SPAM")
+        print(f"✅ Prediction: NOT SPAM (confidence {confidence:.2f})")
