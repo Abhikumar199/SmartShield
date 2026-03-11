@@ -1,17 +1,15 @@
 import joblib
 import json
 
-# load vectorizer
+# Load vectorizer
 vectorizer = joblib.load("vectorizer.pkl")
 
-# get vocabulary
-vocab = vectorizer.vocabulary_
+# Convert numpy int64 → normal int
+vocab = {word: int(index) for word, index in vectorizer.vocabulary_.items()}
 
-# convert numpy int64 → normal int
-vocab_fixed = {k: int(v) for k, v in vocab.items()}
+# Save vocab
+with open("vocab.json", "w", encoding="utf-8") as f:
+    json.dump(vocab, f, ensure_ascii=False, indent=2)
 
-# save json
-with open("vocab.json", "w") as f:
-    json.dump(vocab_fixed, f)
-
-print("vocab.json created successfully")
+print("✅ vocab.json exported successfully")
+print("Vocabulary size:", len(vocab))
