@@ -1,43 +1,42 @@
 # SmartShield
 
-**On-device SMS fraud detection using Spiking Neural Networks — built for privacy, speed, and real-world Indian scam patterns.**
+**On-device SMS fraud detection for Android — SNN model running via PyTorch Mobile, planning to migrate to ONNX.**
 
-[![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://python.org)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red.svg)](https://pytorch.org)
-[![snnTorch](https://img.shields.io/badge/snnTorch-neuromorphic-purple.svg)](https://snntorch.readthedocs.io)
-[![ONNX](https://img.shields.io/badge/ONNX-Runtime_Mobile-green.svg)](https://onnxruntime.ai)
-[![React Native](https://img.shields.io/badge/React_Native-TypeScript-61DAFB.svg)](https://reactnative.dev)
+> ⚠️ Work in progress. Core ML pipeline and Android app are functional, but the project is still under active development.
 
 ---
 
 ## What is this?
 
-SmartShield is something we built because we were genuinely frustrated with how SMS fraud detection works today. Keyword filters are trivially easy to bypass. Cloud-based ML means your messages are being sent to some server somewhere. And most solutions are built with Western spam patterns in mind — they miss UPI scams, fake KYC alerts, OTP theft messages that are extremely common in India.
+SmartShield is a native Android app that detects SMS fraud entirely on-device — no internet, no cloud, no data leaving your phone. We trained a Spiking Neural Network on a mix of standard spam datasets and custom Indian fraud samples (UPI scams, KYC alerts, OTP theft, fake bank messages), then deployed it on Android using PyTorch Mobile.
 
-So we built something different. A fully on-device fraud detection system that uses a **Spiking Neural Network (SNN)** — a type of neuromorphic model inspired by how biological neurons actually fire. It runs entirely on your phone, no internet required, and is trained specifically to catch the kind of fraud Indian users actually face.
+The app lets you paste any SMS and get an instant verdict. It also runs a `BroadcastReceiver` in the background to intercept incoming SMS automatically.
 
 **Team:** Abhishek Kumar (Team Lead) · Hitesh Pratap Singh  
 *Built for NIT Hackathon*
 
 ---
 
-## How it works
+## What's actually built so far
 
-When an SMS arrives, it goes through two stages.
+**ML side (Python)**
+- SNN model trained with PyTorch + snnTorch
+- TF-IDF vectorizer (vocab size 900–1200 tokens)
+- Model exported to `.pt` format via `torch.jit.script` / `torch.jit.trace` for mobile
 
-First, a rule-based filter quickly checks for obvious red flags — suspicious sender patterns, known OTP-theft phrases, embedded URLs, etc. Most clear-cut spam gets caught here in microseconds.
+**Android app (Kotlin + Jetpack Compose)**
+- Loads `spam_model_mobile.pt` from assets using PyTorch Android (`org.pytorch:pytorch_android:1.13.1`)
+- `VocabHelper.kt` — reads `vocab.json` from assets, converts raw SMS text into a float vector
+- `SpamDetector.kt` — runs the `.pt` model using PyTorch `Module.forward()`
+- `MainActivity.kt` — Compose UI with a text field to paste and analyze messages, shows risk level + model confidence
+- `SmsReceiver.kt` — `BroadcastReceiver` that listens for incoming SMS (currently shows a toast, full integration pending)
+- `Utils.kt` — copies model from assets to internal storage (required by PyTorch Mobile)
+- Rule-based layer in `MainActivity.kt` — keyword fraud check + phishing URL detection on top of the model output, combines into a `fraudScore`
 
-If the message passes that filter (or looks borderline), it goes into the SNN classifier. We extract 9 features from the message — things like TF-IDF text representation, digit ratio, capital letter ratio, urgency keyword score — and encode them into **spike trains** using latency encoding:
-
-```
-tᵢ = Tmax(1 − xᵢ)
-```
-
-These spike trains feed into a 1D Convolutional SNN with Leaky Integrate-and-Fire (LIF) neurons. The LIF model only "fires" when input crosses a threshold, which means most neurons stay silent for most inputs. That's what makes it energy efficient compared to a regular neural network.
-
-The model outputs one of four classes: **Phishing, Spam, Suspicious, or Safe** — along with a confidence score and a suggested action (Ignore / Block / Report).
-
-Everything runs on-device via ONNX Runtime Mobile. Your messages never leave your phone.
+**What the output looks like**
+- Model gives two softmax scores (safe / spam)
+- Those are combined with the rule-based `fraudScore`
+- Final verdict: `HIGH RISK` or `SAFE`, shown with confidence percentage
 
 ---
 
@@ -45,197 +44,145 @@ Everything runs on-device via ONNX Runtime Mobile. Your messages never leave you
 
 ```
 SmartShield/
-├── code.ipynb            # where all the training happens
-├── predict.py            # run inference from the command line
-├── rules.py              # the rule-based pre-filter
-├── export_onnx.py        # converts trained model to ONNX
-├── export_vocab.py       # exports vocab for on-device tokenization
-├── snn_spam_model.pth    # saved model weights
+│
+├── app/src/main/
+│   ├── assets/
+│   │   ├── spam_model_mobile.pt     # PyTorch Mobile model (current)
+│   │   └── vocab.json               # TF-IDF vocabulary
+│   │
+│   └── java/com/example/smartshield/
+│       ├── MainActivity.kt          # UI + rule-based logic
+│       ├── SpamDetector.kt          # PyTorch inference wrapper
+│       ├── SmsReceiver.kt           # BroadcastReceiver for incoming SMS
+│       ├── VocabHelper.kt           # Text → float vector conversion
+│       ├── Utils.kt                 # Asset file helper
+│       └── ui/theme/                # Compose theme files
+│
+├── app/build.gradle.kts             # Dependencies (PyTorch Mobile, Compose, Room)
+└── AndroidManifest.xml              # SMS permissions + receiver registration
+```
+
+**Python side (separate repo / notebook)**
+
+```
+├── code.ipynb            # SNN training
+├── predict.py            # CLI inference test
+├── rules.py              # rule-based pre-filter
+├── export_onnx.py        # ONNX export (planned migration)
+├── export_vocab.py       # exports vocab.json for mobile
+├── snn_spam_model.pth    # trained weights
 ├── vectorizer.pkl        # fitted TF-IDF vectorizer
 ├── scaler.pkl            # feature scaler
-├── abhi.csv              # our custom Indian fraud dataset
-├── syn.csv               # synthetic phishing samples we generated
-└── uci                   # UCI SMS Spam Collection (benchmark data)
+├── abhi.csv              # custom Indian fraud dataset
+├── syn.csv               # synthetic phishing samples
+└── uci                   # UCI SMS Spam Collection
 ```
+
+---
+
+## Running the Android app
+
+**Requirements**
+
+- Android Studio (Hedgehog or later)
+- Android SDK API 24+
+- Physical device or emulator (arm64-v8a — the build currently filters for arm64 only)
+- JDK 17
+
+**Steps**
+
+```bash
+git clone https://github.com/Abhikumar199/SmartShield.git
+cd SmartShield
+```
+
+Open the project in Android Studio, let Gradle sync, then run on your device. The model and vocab are already bundled in `assets/` so no extra setup needed.
+
+The first time the app launches, `Utils.kt` copies `spam_model_mobile.pt` from assets to internal storage — this is a PyTorch Mobile requirement, it can't load directly from the asset stream.
+
+**Permissions**
+
+Already declared in `AndroidManifest.xml`:
+
+```xml
+<uses-permission android:name="android.permission.RECEIVE_SMS" />
+<uses-permission android:name="android.permission.READ_SMS" />
+```
+
+The app requests `RECEIVE_SMS` and `READ_SMS` at runtime on first launch.
+
+---
+
+## How the inference works
+
+When you tap "Analyze Message", here's what actually happens in the code:
+
+1. Text is lowercased and split into words
+2. `VocabHelper` maps each word to its index in `vocab.json` and builds a `FloatArray` of size 1200 (bag-of-words style)
+3. That array is passed to PyTorch Mobile as a `Tensor` of shape `[1, 1200]`
+4. The model returns two logits (safe, spam), softmax is applied manually
+5. In parallel, `keywordFraud()` checks for known fraud keywords and `detectPhishingUrl()` checks for suspicious domains / link shorteners
+6. A `fraudScore` combines both signals — model prediction adds 3 points, keyword hit adds 4, URL adds 2
+7. If `fraudScore >= 7`, the message is forced to spam regardless of model output
+
+This hybrid approach means the model doesn't have to be perfect on its own — the rules catch obvious stuff, the model handles the edge cases.
+
+---
+
+## Dependencies (Android)
+
+```kotlin
+implementation("org.pytorch:pytorch_android:1.13.1")
+implementation("org.pytorch:pytorch_android_torchvision:1.13.1")
+// Jetpack Compose, Material3, Room (added for future history feature)
+```
+
+---
+
+## Planned / in progress
+
+- [ ] **ONNX migration** — `export_onnx.py` is ready on the Python side, Android integration pending. ONNX Runtime Mobile will replace PyTorch Mobile for smaller binary size and better cross-platform support.
+- [ ] **SmsReceiver full integration** — currently shows a toast on SMS receive, needs to run `SpamDetector` and trigger a notification
+- [ ] **Notification system** — alert the user when a background SMS gets flagged
+- [ ] **Message history** — Room DB is already added as a dependency, schema not implemented yet
+- [ ] **iOS support** — not started
+- [ ] **ANN baseline comparison** — for the paper/report
+
+---
+
+## Training (Python side)
+
+```bash
+python -m venv venv
+source venv/bin/activate
+
+pip install torch snntorch scikit-learn pandas numpy onnx onnxruntime
+
+# train
+jupyter notebook code.ipynb
+
+# test inference locally
+python predict.py --message "Your KYC is expired. Update now to avoid account suspension."
+
+# export for mobile (PyTorch)
+# handled inside code.ipynb via torch.jit.trace → spam_model_mobile.pt
+
+# export to ONNX (planned)
+python export_onnx.py
+```
+
+---
+
+## Why SNN?
+
+Standard neural networks compute on every neuron for every input. Leaky Integrate-and-Fire neurons only fire when their membrane potential crosses a threshold — most stay silent. That sparsity translates to fewer multiply-accumulate operations and lower energy use, which matters a lot for something running continuously on a phone battery.
+
+We use latency encoding to convert text features into spike trains: `tᵢ = Tmax(1 − xᵢ)`. Features with higher importance produce earlier spikes. The 1D Conv SNN layers then process these temporal patterns.
 
 ---
 
 ## Dataset
 
-We trained on a mix of two sources.
+80% UCI SMS Spam Collection (standard benchmark), 20% custom samples we built — UPI fraud, fake KYC, OTP theft, delivery scams. The Indian-context data was important because those attack patterns are basically absent from every public dataset we found.
 
-**80% — UCI SMS Spam Collection.** Standard benchmark, well-labeled, good general coverage of spam vs. ham.
-
-**20% — Custom dataset we built ourselves.** This is the part we're most proud of. We collected and generated samples covering UPI fraud, fake KYC alerts, bank impersonation, delivery scam messages, OTP theft attempts — stuff that's everywhere in India but totally absent from standard datasets. Without this, the model would be blind to a huge category of real-world attacks.
-
-We handled class imbalance using a weighted loss function and kept the train/val split stratified so the class ratio stays consistent across splits.
-
----
-
-## Training & running locally
-
-**Setup**
-
-```bash
-git clone https://github.com/Abhikumar199/SmartShield.git
-cd SmartShield
-
-python -m venv venv
-source venv/bin/activate   # on Windows: venv\Scripts\activate
-
-pip install torch snntorch scikit-learn pandas numpy onnx onnxruntime
-```
-
-**Training**
-
-Open `code.ipynb` in Jupyter and run through it. The notebook trains the SNN, evaluates it, and saves the weights to `snn_spam_model.pth`.
-
-```bash
-jupyter notebook code.ipynb
-```
-
-**Quick inference test**
-
-```bash
-python predict.py --message "Dear customer, your KYC is expired. Click here to verify now."
-```
-
-Output looks like:
-```
-Rule-Based Filter: flagged (urgency keyword + URL pattern)
-SNN Inference: PHISHING  [confidence: 0.91]
-Suggested action: Block & Report
-```
-
-**Export for mobile**
-
-```bash
-python export_onnx.py      # produces snn_spam_model.onnx
-python export_vocab.py     # produces vocab.json for on-device tokenizer
-```
-
----
-
-## Android app
-
-The mobile side is a React Native app (TypeScript) with native Kotlin modules handling the actual ONNX inference and SMS interception.
-
-### What you need
-
-- Android Studio (Hedgehog or later)
-- Android SDK API 26+
-- Node.js 18+
-- JDK 17
-
-### Getting it running
-
-```bash
-npm install
-npm install onnxruntime-react-native
-
-# drop the model files into Android assets
-cp snn_spam_model.onnx android/app/src/main/assets/
-cp vocab.json android/app/src/main/assets/
-
-# start metro
-npx react-native start
-
-# run on device or emulator
-npx react-native run-android
-```
-
-### Permissions
-
-Add these to `android/app/src/main/AndroidManifest.xml`:
-
-```xml
-<uses-permission android:name="android.permission.RECEIVE_SMS" />
-<uses-permission android:name="android.permission.READ_SMS" />
-<uses-permission android:name="android.permission.READ_PHONE_STATE" />
-```
-
-### How the SMS interception works (Kotlin)
-
-```kotlin
-// SmsReceiver.kt
-class SmsReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Telephony.Sms.Intents.SMS_RECEIVED_ACTION) {
-            val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
-            for (sms in messages) {
-                SmartShieldModule.analyzeMessage(sms.messageBody)
-            }
-        }
-    }
-}
-```
-
-### ONNX inference module (Kotlin)
-
-```kotlin
-// SmartShieldModule.kt
-class SmartShieldModule(reactContext: ReactApplicationContext) :
-    ReactContextBaseJavaModule(reactContext) {
-
-    private lateinit var ortSession: OrtSession
-    private val ortEnv = OrtEnvironment.getEnvironment()
-
-    override fun getName() = "SmartShieldModule"
-
-    @ReactMethod
-    fun analyzeMessage(message: String, promise: Promise) {
-        val features = extractFeatures(message)
-        val inputTensor = OnnxTensor.createTensor(ortEnv, features)
-        val result = ortSession.run(mapOf("input" to inputTensor))
-        val scores = (result[0].value as Array<FloatArray>)[0]
-        promise.resolve(buildResultMap(scores))
-    }
-}
-```
-
-The native module bridges to React Native via JSI/TurboModules to keep the overhead minimal.
-
----
-
-## Performance targets
-
-We're aiming for:
-
-- F1-score above 0.90
-- Inference under 100ms per message
-- Meaningfully lower energy use than an equivalent ANN — sparse LIF firing is what makes this possible
-
-These are targets, not guarantees. Actual numbers depend on the device. We'll publish a proper comparison against an ANN baseline once the full evaluation is done.
-
----
-
-## Tech used
-
-**ML:** Python, PyTorch, snnTorch, scikit-learn, ONNX
-
-**Mobile:** React Native (TypeScript), Kotlin, Swift, JSI/TurboModules, ONNX Runtime Mobile
-
----
-
-## What's left
-
-- [x] SNN training pipeline
-- [x] Rule-based pre-filter
-- [x] ONNX export
-- [ ] React Native + Android integration (in progress)
-- [ ] Background service for passive SMS monitoring
-- [ ] iOS support
-- [ ] ANN baseline comparison write-up
-- [ ] Federated learning (longer-term idea)
-
----
-
-## Contributing
-
-If you find a bug, have fraud message samples to contribute (especially Indian-context ones), or want to help with the Android side — open an issue or send a PR.
-
----
-
-## Acknowledgements
-
-UCI SMS Spam Collection for the base dataset, the snnTorch team for making SNN research accessible in PyTorch, and ONNX Runtime Mobile for making on-device inference actually practical on real phones.
+Class imbalance handled with weighted loss + stratified splits.
